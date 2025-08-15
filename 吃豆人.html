@@ -1,0 +1,434 @@
+<!-- index.html -->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>网页吃豆人</title>
+<style>
+  :root{--bg:#0b0f19;--panel:#111827cc;--text:#e5e7eb;--accent:#22d3ee;--wall:#3b82f6;--gate:#94a3b8;--pellet:#f8fafc;--power:#f59e0b;--pac:#facc15}
+  html,body{height:100%;margin:0;background:radial-gradient(1200px 700px at 50% -10%,#111827,#0b0f19);color:var(--text);font:14px/1.4 system-ui,Segoe UI,Roboto,Helvetica,Arial}
+  .wrap{max-width:860px;margin:24px auto;padding:0 12px;display:grid;gap:12px;justify-items:center}
+  .hud{width:100%;max-width:800px;display:flex;align-items:center;justify-content:space-between;background:var(--panel);backdrop-filter:saturate(140%) blur(6px);border:1px solid #1f2937;border-radius:14px;padding:10px 14px}
+  .hud .left,.hud .right{display:flex;gap:12px;align-items:center}
+  .btn{appearance:none;border:1px solid #334155;background:#0f172acc;color:var(--text);padding:8px 12px;border-radius:10px;cursor:pointer}
+  .btn:hover{border-color:#475569}
+  .stat{padding:6px 10px;border:1px solid #334155;border-radius:10px;background:#0f172acc}
+  canvas{display:block;background:#000;border-radius:16px;border:1px solid #1f2937;image-rendering:pixelated;max-width:100%}
+  .kbd{padding:2px 6px;border:1px solid #374151;border-radius:6px;background:#0b1020}
+  .overlay{position:absolute;inset:0;display:none;align-items:center;justify-content:center;color:#e5e7eb;background:#00000080;border-radius:16px}
+  .overlay.show{display:flex}
+  .legend{opacity:.8}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hud">
+    <div class="left">
+      <div class="stat">分数：<span id="score">0</span></div>
+      <div class="stat">关卡：<span id="level">1</span></div>
+      <div class="stat">生命：<span id="lives">3</span></div>
+    </div>
+    <div class="right">
+      <button id="toggle" class="btn">暂停</button>
+      <button id="reset" class="btn">重开</button>
+      <span class="legend">控制：<span class="kbd">WASD/方向键</span></span>
+    </div>
+  </div>
+
+  <div style="position:relative">
+    <canvas id="game" width="504" height="552"></canvas>
+    <div id="overlay" class="overlay"><div>
+      <div id="overlayText" style="font-size:28px;text-align:center;margin-bottom:8px"></div>
+      <div style="text-align:center"><button id="resume" class="btn">继续</button></div>
+    </div></div>
+  </div>
+
+  <div id="testlog" class="stat" style="max-width:800px;width:100%"></div>
+</div>
+
+<script>
+(() => {
+  // ===== 常量与状态 =====
+  const TILE=24, COLS=21, ROWS=23;
+  const WIDTH=COLS*TILE, HEIGHT=ROWS*TILE;
+  const tunnelRow=Math.floor(ROWS/2);
+  const SPEEDS={pac:6*TILE,ghost:5*TILE,fright:3.2*TILE,eyes:8*TILE};
+  const POWER_DURATION=7000, pelletScore=10, powerScore=50, eatGhostScore=200;
+
+  const canvas=document.getElementById('game'); canvas.width=WIDTH; canvas.height=HEIGHT;
+  const ctx=canvas.getContext('2d');
+  const scoreEl=document.getElementById('score');
+  const levelEl=document.getElementById('level');
+  const livesEl=document.getElementById('lives');
+  const overlay=document.getElementById('overlay');
+  const overlayText=document.getElementById('overlayText');
+  const toggleBtn=document.getElementById('toggle');
+
+  const DIRS={left:{x:-1,y:0},right:{x:1,y:0},up:{x:0,y:-1},down:{x:0,y:1},stop:{x:0,y:0}};
+  const isOpposite=(a,b)=>a.x===-b.x&&a.y===-b.y;
+  const tileCenter=(c,r)=>({x:c*TILE+TILE/2,y:r*TILE+TILE/2});
+  const pos2tile=(x,y)=>({c:Math.floor(x/TILE),r:Math.floor(y/TILE)});
+  const nearCenter=(x,y)=>{const {c,r}=pos2tile(x,y);const cx=(c+0.5)*TILE,cy=(r+0.5)*TILE;return Math.abs(x-cx)<0.5&&Math.abs(y-cy)<0.5};
+  const passPac=(r,c)=>grid[r]&&grid[r][c]!==1&&grid[r][c]!==4;
+  const passGhost=(r,c)=>grid[r]&&grid[r][c]!==1;
+  const clampDir=(e,dir,passFn)=>{const {c,r}=pos2tile(e.x,e.y);return passFn(r+dir.y,c+dir.x)?dir:DIRS.stop};
+  const distance2=(ax,ay,bx,by)=>{const dx=ax-bx,dy=ay-by;return dx*dx+dy*dy};
+
+  // 隧道判定：只在“行内 + 靠近左右边缘”时限制上下
+  const tunnelCenterY=(tunnelRow+0.5)*TILE;
+  const inTunnelY=(y)=>Math.abs(y-tunnelCenterY)<=TILE*0.45;
+  const nearEdgeX=(x)=> x < TILE*1.2 || x > WIDTH - TILE*1.2;
+  const tunnelTurnBlocked=(x,y,dir)=> inTunnelY(y) && nearEdgeX(x) && Math.abs(dir.y)===1;
+
+  // ===== 地图接口 =====
+  const grid=Array.from({length:ROWS},()=>Array(COLS).fill(0));
+
+  // 地图1：原始布局
+  function generateMap1(){
+    // 先清空
+    for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++) grid[r][c]=0;
+    // 边框
+    for(let c=0;c<COLS;c++){grid[0][c]=1;grid[ROWS-1][c]=1}
+    for(let r=0;r<ROWS;r++){grid[r][0]=1;grid[r][COLS-1]=1}
+    // 隧道开口
+    grid[tunnelRow][0]=0; grid[tunnelRow][COLS-1]=0;
+    // 布局
+    const wallH=(r,c0,c1)=>{for(let c=c0;c<=c1;c++)grid[r][c]=1};
+    const wallV=(c,r0,r1)=>{for(let r=r0;r<=r1;r++)grid[r][c]=1};
+    wallH(2,2,COLS-3);
+    wallH(4,2,6); wallH(4,COLS-7,COLS-3);
+    wallH(6,2,6); wallH(6,9,11); wallH(6,COLS-7,COLS-3);
+    wallV(2,2,8); wallV(COLS-3,2,8);
+    wallV(6,2,8); wallV(COLS-7,2,8);
+    wallV(10,2,4); wallV(10,6,8);
+    wallH(10,2,COLS-3);
+    wallV(4,10,ROWS-11); wallV(COLS-5,10,ROWS-11);
+    wallH(ROWS-13,2,6); wallH(ROWS-13,COLS-7,COLS-3);
+    // 幽灵之家
+    const rc=Math.floor(ROWS/2), cc=Math.floor(COLS/2);
+    const top=rc-1, bot=rc+2, left=cc-3, right=cc+3;
+    for(let c=left;c<=right;c++){grid[top][c]=1;grid[bot][c]=1}
+    for(let r=top;r<=bot;r++){grid[r][left]=1;grid[r][right]=1}
+    grid[top][cc]=4;
+    for(let r=top+1;r<=bot-1;r++)for(let c=left+1;c<=right-1;c++)grid[r][c]=2; // 房内无豆
+    // 下部镜像
+    wallH(ROWS-5,2,6); wallH(ROWS-5,COLS-7,COLS-3);
+    wallH(ROWS-7,2,6); wallH(ROWS-7,9,11); wallH(ROWS-7,COLS-7,COLS-3);
+    wallV(2,ROWS-9,ROWS-3); wallV(COLS-3,ROWS-9,ROWS-3);
+    wallV(6,ROWS-9,ROWS-3); wallV(COLS-7,ROWS-9,ROWS-3);
+    wallV(10,ROWS-9,ROWS-7); wallV(10,ROWS-5,ROWS-3);
+    // 能量豆
+    grid[1][1]=3; grid[1][COLS-2]=3; grid[ROWS-2][1]=3; grid[ROWS-2][COLS-2]=3;
+  }
+
+  const MAPS=[generateMap1]; // 后续 push 新地图函数
+
+  function cleanupUnreachablePellets(){
+    const reachable=Array.from({length:ROWS},()=>Array(COLS).fill(false));
+    const sr=Math.floor(ROWS/2)+4, sc=Math.floor(COLS/2);
+    const q=[[sr,sc]]; reachable[sr][sc]=true;
+    while(q.length){
+      const [r,c]=q.shift();
+      for(const [nr,nc] of [[r+1,c],[r-1,c],[r,c+1],[r,c-1]]){
+        if(nr<0||nr>=ROWS||nc<0||nc>=COLS) continue;
+        if(reachable[nr][nc]) continue;
+        if(grid[nr][nc]===1||grid[nr][nc]===4) continue;
+        reachable[nr][nc]=true; q.push([nr,nc]);
+      }
+    }
+    for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){
+      if((grid[r][c]===0||grid[r][c]===3) && !reachable[r][c]) grid[r][c]=2;
+    }
+  }
+
+  function recountPellets(){
+    let n=0;for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++)if(grid[r][c]===0||grid[r][c]===3)n++;return n;
+  }
+
+  function buildMapForLevel(lv){
+    const gen = MAPS[lv-1] || MAPS[0];
+    gen();               // 生成
+    cleanupUnreachablePellets(); // 清死区豆
+    pelletsLeft = recountPellets();
+  }
+
+  // ===== 实体与进度 =====
+  const makePac=()=>{const s=tileCenter(Math.floor(COLS/2),Math.floor(ROWS/2)+4);return {x:s.x,y:s.y,dir:DIRS.left,want:DIRS.left,speed:SPEEDS.pac,mouth:0,mouthDir:1,alive:true}};
+  const pac=makePac();
+  const GHOST_STATE={normal:0,fright:1,eyes:2};
+  function makeGhost(color,offset){
+    const c0=Math.floor(COLS/2)+offset, r0=Math.floor(ROWS/2)+1, p=tileCenter(c0,r0);
+    return {x:p.x,y:p.y,dir:DIRS.up,speed:SPEEDS.ghost,color,state:GHOST_STATE.normal,frightUntil:0,home:tileCenter(Math.floor(COLS/2),Math.floor(ROWS/2)+1)};
+  }
+  const ghosts=[makeGhost('#ff4d4d',0),makeGhost('#ffb8ff',-2),makeGhost('#00ffff',2),makeGhost('#ffb847',-1)];
+
+  let score=0,lives=3,level=1,pelletsLeft=0;
+  buildMapForLevel(level);
+  function updateHUD(){scoreEl.textContent=score;levelEl.textContent=level;livesEl.textContent=lives}
+  updateHUD();
+
+  // 输入与UI
+  window.addEventListener('keydown',e=>{
+    const k=e.key.toLowerCase();
+    if(k==='arrowleft'||k==='a')pac.want=DIRS.left;
+    else if(k==='arrowright'||k==='d')pac.want=DIRS.right;
+    else if(k==='arrowup'||k==='w')pac.want=DIRS.up;
+    else if(k==='arrowdown'||k==='s')pac.want=DIRS.down;
+    else if(k===' ')togglePause();
+  });
+  document.getElementById('reset').onclick=resetGame;
+  document.getElementById('resume').onclick=()=>{overlay.classList.remove('show');paused=false;toggleBtn.textContent='暂停'};
+  toggleBtn.onclick=togglePause;
+
+  let paused=false,gameOver=false;
+  function togglePause(){
+    if(gameOver)return;
+    paused=!paused;
+    toggleBtn.textContent=paused?'继续':'暂停';
+    overlayText.textContent=paused?'暂停中':'';
+    overlay.classList.toggle('show',paused);
+  }
+  function resetPositions(){
+    Object.assign(pac,makePac());
+    ghosts.splice(0,ghosts.length,makeGhost('#ff4d4d',0),makeGhost('#ffb8ff',-2),makeGhost('#00ffff',2),makeGhost('#ffb847',-1));
+  }
+  // 重开：保留关卡与分数；位置重置；生命回满
+  function resetGame(){
+    gameOver=false;paused=false;
+    overlay.classList.remove('show');overlayText.textContent='';
+    toggleBtn.textContent='暂停';
+    lives=3; updateHUD();
+    resetPositions();
+  }
+
+  function onLevelCleared(){
+    if(level >= MAPS.length){
+      // 只有一关：直接胜利结束
+      gameOver=true; paused=true;
+      overlayText.textContent='通关';
+      overlay.classList.add('show');
+    }else{
+      // 预留：多关继续
+      level++;
+      buildMapForLevel(level);
+      ghosts.forEach(g=>g.speed*=1.08); pac.speed*=1.04;
+      resetPositions(); updateHUD();
+    }
+  }
+
+  function loseLife(){
+    lives--; updateHUD();
+    if(lives<=0){gameOver=true;paused=true;overlayText.textContent='游戏结束';overlay.classList.add('show')}
+    else resetPositions();
+  }
+
+  // 主循环
+  let last=performance.now();
+  requestAnimationFrame(loop);
+  function loop(t){
+    const dt=Math.min(1/30,(t-last)/1000);last=t;
+    if(!paused){update(dt);draw()}
+    requestAnimationFrame(loop);
+  }
+
+  // 逻辑
+  function update(dt){
+    // 仅在“边缘开口”禁上/下
+    snapToCorridor(pac);
+    if(nearCenter(pac.x,pac.y)){
+      let tryDir=clampDir(pac,pac.want,passPac);
+      if(tunnelTurnBlocked(pac.x,pac.y,tryDir)) tryDir=DIRS.stop;
+      if(tryDir!==DIRS.stop) pac.dir=tryDir;
+      if(clampDir(pac,pac.dir,passPac)===DIRS.stop) pac.dir=DIRS.stop;
+    }
+    moveEntity(pac,dt,true);
+
+    const {c:pc,r:pr}=pos2tile(pac.x,pac.y);
+    if(nearCenter(pac.x,pac.y)){
+      if(grid[pr][pc]===0){grid[pr][pc]=2;score+=pelletScore;pelletsLeft--;updateHUD()}
+      else if(grid[pr][pc]===3){grid[pr][pc]=2;score+=powerScore;pelletsLeft--;updateHUD();frightenGhosts()}
+      if(pelletsLeft<=0) onLevelCleared();
+    }
+
+    for(const g of ghosts){
+      const now=performance.now();
+      if(g.state===GHOST_STATE.fright&&now>g.frightUntil)g.state=GHOST_STATE.normal;
+      g.speed=(g.state===GHOST_STATE.eyes)?SPEEDS.eyes:(g.state===GHOST_STATE.fright)?SPEEDS.fright:SPEEDS.ghost;
+      snapToCorridor(g);
+      if(nearCenter(g.x,g.y)){
+        const opts=availDirs(g,passGhost);
+        const dirs=opts.filter(d=>!isOpposite(d,g.dir))||opts;
+        const target=(g.state===GHOST_STATE.eyes)?g.home:(g.state===GHOST_STATE.fright)?null:{x:pac.x,y:pac.y};
+        g.dir=chooseDir(g,dirs,target,g.state);
+      }
+      moveEntity(g,dt,false);
+      const hit=distance2(g.x,g.y,pac.x,pac.y)<(TILE*0.6)*(TILE*0.6);
+      if(hit){
+        if(g.state===GHOST_STATE.fright){g.state=GHOST_STATE.eyes;score+=eatGhostScore;updateHUD()}
+        else if(g.state!==GHOST_STATE.eyes){loseLife();break}
+      }
+    }
+  }
+  function frightenGhosts(){
+    const till=performance.now()+POWER_DURATION;
+    ghosts.forEach(g=>{if(g.state!==GHOST_STATE.eyes){g.state=GHOST_STATE.fright;g.frightUntil=till;g.dir={x:-g.dir.x,y:-g.dir.y}}});
+  }
+
+  // 边界与隧道
+  function moveEntity(e,dt,isPac){
+    e.x+=e.dir.x*e.speed*dt; e.y+=e.dir.y*e.speed*dt;
+    // 仅在边缘开口对齐 Y 并禁止竖直运动
+    if(isPac && inTunnelY(e.y) && nearEdgeX(e.x)){
+      e.y=tunnelCenterY;
+      if(e.dir.y!==0) e.dir=DIRS.stop;
+    }
+    // 水平回环或夹止
+    if(inTunnelY(e.y)){
+      if(e.x<-TILE/2)e.x=WIDTH-TILE/2;
+      if(e.x>WIDTH+TILE/2)e.x=TILE/2;
+    }else{
+      if(e.x<TILE/2){e.x=TILE/2;if(e.dir.x<0)e.dir=DIRS.stop}
+      if(e.x>WIDTH-TILE/2){e.x=WIDTH-TILE/2;if(e.dir.x>0)e.dir=DIRS.stop}
+    }
+    // 垂直夹止
+    if(e.y<TILE/2){e.y=TILE/2;if(e.dir.y<0)e.dir=DIRS.stop}
+    if(e.y>HEIGHT-TILE/2){e.y=HEIGHT-TILE/2;if(e.dir.y>0)e.dir=DIRS.stop}
+    if(isPac){
+      e.mouth+=e.mouthDir*dt*8;
+      if(e.mouth>1){e.mouth=1;e.mouthDir=-1}
+      if(e.mouth<0){e.mouth=0;e.mouthDir=1}
+    }
+  }
+  function snapToCorridor(e){
+    const {c,r}=pos2tile(e.x,e.y), cx=(c+0.5)*TILE, cy=(r+0.5)*TILE, k=12;
+    if(e.dir.x!==0)e.y+=Math.sign(cy-e.y)*Math.min(Math.abs(cy-e.y),k*(1/60));
+    if(e.dir.y!==0)e.x+=Math.sign(cx-e.x)*Math.min(Math.abs(cx-e.x),k*(1/60));
+  }
+  function availDirs(e,passFn){const {c,r}=pos2tile(e.x,e.y);return [DIRS.left,DIRS.right,DIRS.up,DIRS.down].filter(d=>passFn(r+d.y,c+d.x))}
+  function chooseDir(e,dirs,target,state){
+    if(!dirs.length)return DIRS.stop;
+    if(state===GHOST_STATE.fright)return dirs[Math.floor(Math.random()*dirs.length)];
+    if(target){
+      let best=dirs[0],bestD=Infinity;
+      for(const d of dirs){
+        const nt=pos2tile(e.x+d.x*TILE,e.y+d.y*TILE), n=tileCenter(nt.c,nt.r);
+        const d2=distance2(n.x,n.y,target.x,target.y);
+        if(d2<bestD){best=d;bestD=d2}
+      }
+      return best;
+    }
+    return dirs[0];
+  }
+
+  // 绘制
+  function roundRect(ctx,x,y,w,h,r,fill=true){
+    const rr=Math.min(r,w/2,h/2);
+    ctx.beginPath();
+    ctx.moveTo(x+rr,y);
+    ctx.arcTo(x+w,y,x+w,y+h,rr);
+    ctx.arcTo(x+w,y+h,x,y+h,rr);
+    ctx.arcTo(x,y+h,x,y,rr);
+    ctx.arcTo(x,y,x+w,y,rr);
+    if(fill)ctx.fill();else ctx.stroke();
+  }
+  function drawPac(){
+    const m=pac.mouth*0.6, ang=Math.atan2(pac.dir.y,pac.dir.x)||0, openA=m*Math.PI;
+    ctx.fillStyle=getComputedStyle(document.documentElement).getPropertyValue('--pac');
+    ctx.beginPath();ctx.moveTo(pac.x,pac.y);ctx.arc(pac.x,pac.y,10,ang+openA/2,ang-openA/2,true);ctx.closePath();ctx.fill();
+    ctx.fillStyle='#111827';const ex=pac.x+4*Math.cos(ang-Math.PI/2),ey=pac.y+4*Math.sin(ang-Math.PI/2);
+    ctx.beginPath();ctx.arc(ex,ey,2,0,Math.PI*2);ctx.fill();
+  }
+  function drawGhost(g){
+    const frightened=g.state===GHOST_STATE.fright, eyes=g.state===GHOST_STATE.eyes;
+    const color=frightened?'#223bff':(eyes?'#e5e7eb':g.color), x=g.x,y=g.y,w=20,h=18;
+    ctx.fillStyle=color;ctx.beginPath();ctx.arc(x,y-4,w/2,Math.PI,0,false);ctx.lineTo(x+w/2,y+h/2);
+    const feet=4,step=w/feet;for(let i=feet;i>=0;i--){const fx=x-w/2+i*step,fy=y+h/2-(i%2?2:0);ctx.lineTo(fx,fy)}ctx.closePath();ctx.fill();
+    const lookX=g.dir.x*2,lookY=g.dir.y*2;
+    function eye(dx){ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(x-4+dx,y-6,3.5,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.arc(x-4+dx+lookX,y-6+lookY,1.8,0,Math.PI*2);ctx.fillStyle='#1f2937';ctx.fill()}
+    eye(0);eye(8);
+  }
+  function draw(){
+    ctx.clearRect(0,0,WIDTH,HEIGHT);
+    ctx.fillStyle='#000';ctx.fillRect(0,0,WIDTH,HEIGHT);
+    for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){
+      const x=c*TILE,y=r*TILE;
+      if(grid[r][c]===1){ctx.fillStyle=getComputedStyle(document.documentElement).getPropertyValue('--wall');roundRect(ctx,x+3,y+3,TILE-6,TILE-6,6,true)}
+      else if(grid[r][c]===4){ctx.fillStyle=getComputedStyle(document.documentElement).getPropertyValue('--gate');ctx.fillRect(x+6,y+TILE/2-2,TILE-12,4)}
+    }
+    for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){
+      const x=c*TILE+TILE/2,y=r*TILE+TILE/2;
+      if(grid[r][c]===0){ctx.fillStyle=getComputedStyle(document.documentElement).getPropertyValue('--pellet');ctx.beginPath();ctx.arc(x,y,2,0,Math.PI*2);ctx.fill()}
+      else if(grid[r][c]===3){ctx.fillStyle=getComputedStyle(document.documentElement).getPropertyValue('--power');ctx.beginPath();const pulse=2+2*Math.sin(performance.now()/200);ctx.arc(x,y,5+pulse*0.2,0,Math.PI*2);ctx.fill()}
+    }
+    drawPac(); for(const g of ghosts)drawGhost(g);
+    ctx.globalAlpha=0.06;ctx.strokeStyle='#93c5fd';
+    for(let r=0;r<=ROWS;r++){ctx.beginPath();ctx.moveTo(0,r*TILE+.5);ctx.lineTo(WIDTH,r*TILE+.5);ctx.stroke()}
+    for(let c=0;c<=COLS;c++){ctx.beginPath();ctx.moveTo(c*TILE+.5,0);ctx.lineTo(c*TILE+.5,HEIGHT);ctx.stroke()}
+    ctx.globalAlpha=1;
+  }
+
+  // ===== 自测（保留 + 新增） =====
+  const tests=[]; function assert(name,cond){tests.push({name,pass:!!cond})}
+  function renderTests(){
+    const el=document.getElementById('testlog'); if(!el)return;
+    el.innerHTML=`<strong>自测结果</strong><br>`+tests.map(t=>`${t.pass?'✅':'❌'} ${t.name}`).join('<br>');
+  }
+  function runTests(){
+    // 既有
+    assert('resetGame 存在', typeof resetGame==='function');
+    const countPellets=()=>recountPellets();
+    assert('豆子计数一致', countPellets()===pelletsLeft);
+    assert('draw 存在', typeof draw==='function');
+
+    // 重开保留分数关卡
+    score=123; level=3; lives=1; updateHUD(); resetGame();
+    assert('重开保留分数', score===123);
+    assert('重开保留关卡', level===3);
+    assert('重开生命回满', lives===3);
+
+    // 死区豆不存在
+    const reachable=Array.from({length:ROWS},()=>Array(COLS).fill(false));
+    const sr=Math.floor(ROWS/2)+4, sc=Math.floor(COLS/2);
+    const q=[[sr,sc]]; reachable[sr][sc]=true;
+    while(q.length){
+      const [r,c]=q.shift();
+      for(const [nr,nc] of [[r+1,c],[r-1,c],[r,c+1],[r,c-1]]){
+        if(nr<0||nr>=ROWS||nc<0||nc>=COLS) continue;
+        if(reachable[nr][nc]) continue;
+        if(grid[nr][nc]===1||grid[nr][nc]===4) continue;
+        reachable[nr][nc]=true; q.push([nr,nc]);
+      }
+    }
+    let allReach=true;
+    for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){
+      if((grid[r][c]===0||grid[r][c]===3) && !reachable[r][c]) allReach=false;
+    }
+    assert('无死区豆', allReach);
+
+    // 隧道：边缘禁上/下，中段可上/下
+    assert('边缘开口禁上/下', (inTunnelY(tunnelCenterY) && nearEdgeX(TILE*0.5) && tunnelTurnBlocked(TILE*0.5, tunnelCenterY, DIRS.up)));
+    assert('隧道中段可上/下', !tunnelTurnBlocked(WIDTH/2, tunnelCenterY, DIRS.up));
+
+    // 新增：单图通关即结束
+    level=1; buildMapForLevel(1); resetPositions();
+    pelletsLeft=0; update(0);
+    assert('通关时 gameOver=true', gameOver===true);
+    assert('通关提示文字', overlayText.textContent==='通关');
+
+    // 新增：添加第二张地图后会进入第2关
+    const originalLen=MAPS.length;
+    MAPS.push(generateMap1); // 复用一张作为关卡2
+    gameOver=false; overlay.classList.remove('show'); level=1; buildMapForLevel(1); resetPositions(); updateHUD();
+    pelletsLeft=0; update(0);
+    assert('有第2关则不结束', gameOver===false);
+    assert('进入第2关', level===2);
+    MAPS.length=originalLen; // 还原
+
+    renderTests();
+  }
+  window.addEventListener('load', runTests);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>消消乐 · 纯前端单文件</title>
+<style>
+  :root {
+    --cols: 8;
+    --rows: 8;
+    --cell: 64px;         /* 单元格像素 */
+    --gap: 6px;
+    --radius: 14px;
+    --swap-ms: 180ms;
+    --fall-ms: 220ms;
+    --clear-ms: 160ms;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    display: grid;
+    place-items: center;
+    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Helvetica, Arial, sans-serif;
+    background: radial-gradient(1200px 600px at 80% -20%, #2b2f3a 0%, #171a21 55%) fixed;
+    color: #eef0f3;
+  }
+  .wrap { width: calc(var(--cols) * var(--cell) + 32px); }
+  .hud {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; margin-bottom: 12px; padding: 10px 12px;
+    background: rgba(255,255,255,0.06);
+    backdrop-filter: blur(6px);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 14px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+  }
+  .hud .left { display:flex; gap:16px; align-items:baseline; }
+  .score { font-weight: 700; font-size: 1.15rem; letter-spacing: 0.2px; }
+  .msg { opacity: .9; font-size: .95rem; }
+  .btns { display:flex; gap:8px; }
+  button {
+    cursor: pointer; user-select: none; outline: none; border: none;
+    padding: 8px 12px; border-radius: 12px; font-weight: 600; font-size:.95rem;
+    background: #2b7cff; color: #fff;
+    box-shadow: 0 6px 18px rgba(43,124,255,.35);
+    transition: transform .12s ease, box-shadow .12s ease, opacity .12s linear;
+  }
+  button.alt { background: #3bb273; box-shadow: 0 6px 18px rgba(59,178,115,.35); }
+  button.warn { background: #d66; box-shadow: 0 6px 18px rgba(214,102,102,.35);} 
+  button:active { transform: translateY(1px); box-shadow: 0 4px 12px rgba(0,0,0,.25); }
+
+  .board {
+    position: relative;
+    width: calc(var(--cols) * var(--cell));
+    height: calc(var(--rows) * var(--cell));
+    background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
+    border-radius: 16px; padding: 0;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08), 0 24px 60px rgba(0,0,0,0.45);
+  }
+  .grid {
+    position: absolute; inset: 0;
+    border-radius: 12px; overflow: hidden;
+    background: repeating-linear-gradient(0deg, rgba(255,255,255,0.02) 0, rgba(255,255,255,0.02) calc(var(--cell)), transparent calc(var(--cell)), transparent calc(var(--cell) + 1px)),
+                repeating-linear-gradient(90deg, rgba(255,255,255,0.02) 0, rgba(255,255,255,0.02) calc(var(--cell)), transparent calc(var(--cell)), transparent calc(var(--cell) + 1px));
+  }
+  .tile {
+    position: absolute; width: calc(var(--cell) - var(--gap)*2); height: calc(var(--cell) - var(--gap)*2);
+    left: 0; top: 0; border-radius: var(--radius);
+    display: grid; place-items: center; font-weight: 800; color: rgba(0,0,0,.26);
+    transform: translate3d(0,0,0) scale(1);
+    transition: transform var(--fall-ms) cubic-bezier(.2,.8,.2,1), opacity var(--clear-ms) ease;
+    box-shadow: 0 10px 18px rgba(0,0,0,.25), inset 0 -6px 12px rgba(0,0,0,.12);
+    will-change: transform, opacity;
+  }
+  .tile.sel { outline: 3px solid rgba(255,220,80,.9); outline-offset: -3px; }
+  .tile.hint { animation: hintPulse 1s ease-in-out 0s 2; }
+  @keyframes hintPulse { 0% { box-shadow: 0 0 0 0 rgba(255,220,80,.9);} 50% { box-shadow: 0 0 0 10px rgba(255,220,80,0);} 100% { box-shadow: 0 0 0 0 rgba(255,220,80,0);} }
+  .tile.vanish { opacity: 0; transform: scale(.2) translateZ(0); }
+  .tile.shake { animation: shake .2s ease; }
+  @keyframes shake { 0%,100%{ transform: translate3d(0,0,0); } 25%{ transform: translate3d(-6px,0,0); } 75%{ transform: translate3d(6px,0,0);} }
+
+  /* 6 种配色 */
+  .t0 { background: linear-gradient(160deg, #67b5ff, #3f8df5); }
+  .t1 { background: linear-gradient(160deg, #ffa0a0, #ff6b6b); }
+  .t2 { background: linear-gradient(160deg, #6be39c, #35c06c); }
+  .t3 { background: linear-gradient(160deg, #ffd27a, #f5a623); }
+  .t4 { background: linear-gradient(160deg, #c5a6ff, #9b76ff); }
+  .t5 { background: linear-gradient(160deg, #7fe1e1, #3cbcbc); }
+
+  .footer { margin-top: 10px; opacity: .85; font-size: 12px; text-align: center; }
+
+  /* 响应式：窄屏缩小单元格 */
+  @media (max-width: 620px) {
+    :root { --cell: 48px; }
+    .wrap { width: calc(var(--cols) * var(--cell) + 32px); }
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hud">
+      <div class="left">
+        <div class="score">得分：<span id="score">0</span></div>
+        <div class="msg" id="msg">点击两个相邻方块交换</div>
+      </div>
+      <div class="btns">
+        <button id="hintBtn" title="提示 (H)">提示</button>
+        <button class="alt" id="shuffleBtn" title="无解时重排 (S)">重排</button>
+        <button class="warn" id="restartBtn" title="重开 (R)">重开</button>
+      </div>
+    </div>
+
+    <div class="board">
+      <div class="grid" id="grid"></div>
+    </div>
+
+    <div class="footer">操作：点击或触摸两次进行交换。H=提示，S=重排，R=重开。</div>
+  </div>
+
+<script>
+(() => {
+  'use strict';
+  // ===== 配置 =====
+  const ROWS = 8, COLS = 8, TYPES = 6;
+  const SCORE_BASE = 10;       // 每块基础分
+  const ANIM = { swap: 180, fall: 220, clear: 160 };
+
+  // ===== 状态 =====
+  let board = [];              // 数值矩阵，-1 表示空
+  let tileAt = [];             // 与 board 同形状，存 DOM 元素或 null
+  let selected = null;         // 已选坐标 [r,c] 或 null
+  let busy = false;            // 动画中
+  let score = 0;               // 分数
+
+  // DOM
+  const $grid = document.getElementById('grid');
+  const $score = document.getElementById('score');
+  const $msg = document.getElementById('msg');
+  document.getElementById('hintBtn').addEventListener('click', hint);
+  document.getElementById('shuffleBtn').addEventListener('click', reshuffle);
+  document.getElementById('restartBtn').addEventListener('click', restart);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'h' || e.key === 'H') hint();
+    if (e.key === 's' || e.key === 'S') reshuffle();
+    if (e.key === 'r' || e.key === 'R') restart();
+  });
+
+  // ===== 工具 =====
+  const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+  const inBoard = (r,c) => r>=0 && r<ROWS && c>=0 && c<COLS;
+  const same = (a,b) => a && b && a[0]===b[0] && a[1]===b[1];
+  const posKey = (r,c) => `${r},${c}`;
+
+  // 坐标 -> 像素位移
+  function toXY(r,c) {
+    const cell = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--cell')) || 64;
+    const gap = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--gap')) || 6;
+    const x = c*cell + gap;
+    const y = r*cell + gap;
+    return {x,y};
+  }
+
+  // 创建无三连且可走的棋盘
+  function createBoard() {
+    board = Array.from({length: ROWS}, () => Array(COLS).fill(-1));
+    for (let r=0; r<ROWS; r++) {
+      for (let c=0; c<COLS; c++) {
+        while (true) {
+          const t = randType();
+          if (c>=2 && board[r][c-1]===t && board[r][c-2]===t) { continue; }
+          if (r>=2 && board[r-1][c]===t && board[r-2][c]===t) { continue; }
+          board[r][c] = t; break;
+        }
+      }
+    }
+    // 保障至少有一步
+    if (!hasPossibleMove(board)) return createBoard();
+  }
+
+  // 构建 DOM
+  function buildDOM() {
+    $grid.innerHTML = '';
+    tileAt = Array.from({length: ROWS}, () => Array(COLS).fill(null));
+    for (let r=0; r<ROWS; r++) {
+      for (let c=0; c<COLS; c++) {
+        const el = makeTile(board[r][c], r, c);
+        tileAt[r][c] = el;
+        $grid.appendChild(el);
+      }
+    }
+  }
+
+  function makeTile(type, r, c) {
+    const el = document.createElement('div');
+    el.className = `tile t${type}`;
+    el.dataset.type = type;
+    el.dataset.r = r; el.dataset.c = c;
+    const {x,y} = toXY(r,c);
+    el.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+    el.addEventListener('pointerdown', onTileClick);
+    el.addEventListener('dragstart', e => e.preventDefault());
+    return el;
+  }
+
+  function updateTilePos(el, r, c) {
+    el.dataset.r = r; el.dataset.c = c;
+    const {x,y} = toXY(r,c);
+    el.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+  }
+
+  function setTileType(el, type) {
+    // 移除旧 class
+    const old = +el.dataset.type;
+    if (!Number.isNaN(old)) el.classList.remove(`t${old}`);
+    el.classList.add(`t${type}`);
+    el.dataset.type = type;
+  }
+
+  const randType = () => Math.floor(Math.random()*TYPES);
+
+  // ===== 交互 =====
+  async function onTileClick(e) {
+    if (busy) return;
+    const el = e.currentTarget;
+    const r = +el.dataset.r, c = +el.dataset.c;
+    const cur = [r,c];
+
+    if (!selected) {
+      selected = cur; el.classList.add('sel');
+      $msg.textContent = '选择第二个相邻方块';
+      return;
+    }
+
+    // 第二次点击
+    const [r0,c0] = selected; const el0 = tileAt[r0][c0];
+    if (same(selected, cur)) { // 取消
+      el0.classList.remove('sel'); selected = null; $msg.textContent = '点击两个相邻方块交换'; return;
+    }
+    if (Math.abs(r0-r) + Math.abs(c0-c) !== 1) { // 非相邻
+      el0.classList.remove('sel');
+      selected = cur; el.classList.add('sel');
+      return;
+    }
+
+    // 尝试交换
+    el0.classList.remove('sel');
+    selected = null;
+    await trySwap([r0,c0], [r,c]);
+  }
+
+  async function trySwap(a, b) {
+    if (busy) return; busy = true;
+    const [r1,c1] = a, [r2,c2] = b;
+
+    // 预检查
+    if (!wouldFormMatch(board, a, b)) {
+      // 轻微摇动反馈
+      tileAt[r1][c1].classList.add('shake');
+      tileAt[r2][c2].classList.add('shake');
+      await sleep(220);
+      tileAt[r1][c1].classList.remove('shake');
+      tileAt[r2][c2].classList.remove('shake');
+      busy = false; return;
+    }
+
+    // 交换数值与元素映射
+    swapBoard(a,b);
+    // 动画：位置互换
+    // 交换后，tileAt[r1][c1] 已指向原 r2,c2 的元素；tileAt[r2][c2] 指向原 r1,c1 的元素
+    // 因此应让它们分别移动到“各自索引”的位置
+    updateTilePos(tileAt[r1][c1], r1, c1);
+    updateTilePos(tileAt[r2][c2], r2, c2);
+    await sleep(ANIM.fall + 20);
+
+    // 进入消除循环
+    await resolveMatchesLoop();
+
+    // 若无可走，重排
+    if (!hasPossibleMove(board)) await reshuffle();
+
+    busy = false;
+  }
+
+  function swapBoard(a,b) {
+    const [r1,c1] = a, [r2,c2] = b;
+    // 交换值
+    const tv = board[r1][c1]; board[r1][c1] = board[r2][c2]; board[r2][c2] = tv;
+    // 交换元素引用
+    const te = tileAt[r1][c1]; tileAt[r1][c1] = tileAt[r2][c2]; tileAt[r2][c2] = te;
+  }
+
+  function wouldFormMatch(srcBoard, a, b) {
+    // 在局部复制里交换并检测是否产生三连
+    const t = srcBoard.map(row => row.slice());
+    const [r1,c1] = a, [r2,c2] = b;
+    const tv = t[r1][c1]; t[r1][c1] = t[r2][c2]; t[r2][c2] = tv;
+    const m = findMatches(t);
+    return m.size > 0;
+  }
+
+  function findMatches(t) {
+    const matched = new Set();
+    // 横向
+    for (let r=0; r<ROWS; r++) {
+      let cnt=1;
+      for (let c=1; c<COLS; c++) {
+        if (t[r][c] !== -1 && t[r][c] === t[r][c-1]) cnt++; else {
+          if (cnt>=3) for (let k=c-cnt; k<c; k++) matched.add(posKey(r,k));
+          cnt=1;
+        }
+      }
+      if (cnt>=3) for (let k=COLS-cnt; k<COLS; k++) matched.add(posKey(r,k));
+    }
+    // 纵向
+    for (let c=0; c<COLS; c++) {
+      let cnt=1;
+      for (let r=1; r<ROWS; r++) {
+        if (t[r][c] !== -1 && t[r][c] === t[r-1][c]) cnt++; else {
+          if (cnt>=3) for (let k=r-cnt; k<r; k++) matched.add(posKey(k,c));
+          cnt=1;
+        }
+      }
+      if (cnt>=3) for (let k=ROWS-cnt; k<ROWS; k++) matched.add(posKey(k,c));
+    }
+    return matched;
+  }
+
+  async function resolveMatchesLoop() {
+    let combo = 0;
+    while (true) {
+      const matched = findMatches(board);
+      if (matched.size === 0) break;
+      combo++;
+      $msg.textContent = `连锁 ×${combo}`;
+
+      // 标记消失
+      matched.forEach(key => {
+        const [r,c] = key.split(',').map(Number);
+        const el = tileAt[r][c];
+        if (el) el.classList.add('vanish');
+      });
+      await sleep(ANIM.clear);
+
+      // 清空并计分
+      let cleared = 0;
+      matched.forEach(key => {
+        const [r,c] = key.split(',').map(Number);
+        if (tileAt[r][c]) tileAt[r][c].remove();
+        tileAt[r][c] = null; board[r][c] = -1; cleared++;
+      });
+      score += cleared * SCORE_BASE * combo;
+      $score.textContent = score;
+
+      // 下落
+      await fallAndRefill();
+    }
+    $msg.textContent = '点击两个相邻方块交换';
+  }
+
+  async function fallAndRefill() {
+    // 每列从下到上压实
+    for (let c=0; c<COLS; c++) {
+      let wr = ROWS-1; // 写指针到底部
+      for (let r=ROWS-1; r>=0; r--) {
+        if (board[r][c] !== -1) {
+          if (wr !== r) {
+            // 把 r 的块移动到 wr
+            const el = tileAt[r][c];
+            board[wr][c] = board[r][c];
+            tileAt[wr][c] = el;
+            board[r][c] = -1; tileAt[r][c] = null;
+            updateTilePos(el, wr, c);
+          }
+          wr--;
+        }
+      }
+      // 顶部补新块
+      for (let r=wr; r>=0; r--) {
+        const t = randType();
+        board[r][c] = t;
+        const el = makeTile(t, r, c);
+        tileAt[r][c] = el;
+        // 初始从网格上方掉入
+        const {x,y} = toXY(r,c);
+        el.style.transition = 'none';
+        el.style.transform = `translate3d(${x}px, ${y - 40}px, 0)`;
+        $grid.appendChild(el);
+        // 触发回流再启用过渡
+        void el.offsetWidth;
+        el.style.transition = '';
+        el.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+      }
+    }
+    await sleep(ANIM.fall + 30);
+  }
+
+  function hasPossibleMove(t) {
+    // 尝试与四邻交换，看是否产生三连
+    for (let r=0; r<ROWS; r++) {
+      for (let c=0; c<COLS; c++) {
+        const cur = t[r][c];
+        for (const [dr,dc] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+          const rr=r+dr, cc=c+dc;
+          if (!inBoard(rr,cc) || t[rr][cc]===cur) continue;
+          // 交换
+          const tmp = t[r][c]; t[r][c]=t[rr][cc]; t[rr][cc]=tmp;
+          const has = findMatches(t).size>0;
+          // 还原
+          t[rr][cc]=t[r][c]; t[r][c]=tmp;
+          if (has) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  async function hint() {
+    if (busy) return; busy = true;
+    const pair = findOneHint(board);
+    if (!pair) {
+      $msg.textContent = '无可走，建议重排';
+      busy = false; return;
+    }
+    const [[r1,c1],[r2,c2]] = pair;
+    tileAt[r1][c1].classList.add('hint');
+    tileAt[r2][c2].classList.add('hint');
+    await sleep(1100);
+    tileAt[r1][c1].classList.remove('hint');
+    tileAt[r2][c2].classList.remove('hint');
+    busy = false;
+  }
+
+  function findOneHint(t) {
+    for (let r=0; r<ROWS; r++) {
+      for (let c=0; c<COLS; c++) {
+        for (const [dr,dc] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+          const rr=r+dr, cc=c+dc;
+          if (!inBoard(rr,cc) || t[rr][cc]===t[r][c]) continue;
+          const tmp = t[r][c]; t[r][c]=t[rr][cc]; t[rr][cc]=tmp;
+          const ok = findMatches(t).size>0;
+          t[rr][cc]=t[r][c]; t[r][c]=tmp;
+          if (ok) return [[r,c],[rr,cc]];
+        }
+      }
+    }
+    return null;
+  }
+
+  async function reshuffle() {
+    if (busy) return; busy = true; $msg.textContent = '重排中…';
+    // 收集所有值与元素
+    const els = [];
+    for (let r=0; r<ROWS; r++) for (let c=0; c<COLS; c++) els.push(tileAt[r][c]);
+
+    // 尝试多次洗牌，直至无即时三连且可走
+    let tries = 0, ok=false, newBoard;
+    while (tries++ < 200 && !ok) {
+      const vals = els.map(() => randType()); // 重新随机化，避免陷入局部
+      // 填入矩阵避免即时三连
+      newBoard = Array.from({length:ROWS}, () => Array(COLS).fill(-1));
+      let i=0;
+      outer: for (let r=0; r<ROWS; r++) {
+        for (let c=0; c<COLS; c++) {
+          let t0; let count=0;
+          do {
+            t0 = vals[(i + count) % vals.length];
+            count++;
+          } while ((c>=2 && newBoard[r][c-1]===t0 && newBoard[r][c-2]===t0) || (r>=2 && newBoard[r-1][c]===t0 && newBoard[r-2][c]===t0) );
+          newBoard[r][c] = t0; i++;
+        }
+      }
+      if (hasPossibleMove(newBoard)) ok=true;
+    }
+    if (!ok) { busy=false; return restart(); }
+
+    // 将元素分配到新位置与类型
+    let k=0;
+    for (let r=0; r<ROWS; r++) {
+      for (let c=0; c<COLS; c++) {
+        const el = els[k++];
+        setTileType(el, newBoard[r][c]);
+        updateTilePos(el, r, c);
+      }
+    }
+    // 写入新矩阵与映射
+    board = newBoard.map(row => row.slice());
+    tileAt = Array.from({length:ROWS}, () => Array(COLS));
+    for (const el of els) {
+      const r = +el.dataset.r, c = +el.dataset.c;
+      tileAt[r][c] = el;
+    }
+    await sleep(ANIM.swap + 40);
+    $msg.textContent = '已重排';
+    busy = false;
+  }
+
+  function restart() {
+    if (busy) return; busy = true;
+    score = 0; $score.textContent = score; $msg.textContent = '新盘';
+    createBoard(); buildDOM();
+    busy = false;
+  }
+
+  // ===== 启动 =====
+  createBoard();
+  buildDOM();
+})();
+</script>
+</body>
+</html>

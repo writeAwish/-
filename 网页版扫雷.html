@@ -1,0 +1,503 @@
+<!-- index.html | Web 扫雷（修复清空成绩与统计） -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>扫雷 | 用户名与成绩记录</title>
+<style>
+  :root{
+    --cell:28px;
+    --gap:2px;
+    --font:14px;
+    --bg:#0f172a;
+    --panel:#111827;
+    --muted:#9ca3af;
+    --ok:#10b981;
+    --bad:#ef4444;
+    --warn:#f59e0b;
+    --fg:#e5e7eb;
+    --grid:#1f2937;
+  }
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,"Noto Sans",sans-serif}
+  .wrap{max-width:1100px;margin:0 auto;padding:16px;display:grid;grid-template-columns:1fr 340px;gap:16px}
+  header{
+    grid-column:1/-1;background:var(--panel);border-radius:12px;padding:12px 16px;display:flex;flex-wrap:wrap;align-items:center;gap:12px
+  }
+  header h1{font-size:18px;margin:0 8px 0 0;letter-spacing:.5px}
+  .group{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  input,select,button{
+    background:#0b1020;color:var(--fg);border:1px solid #334155;border-radius:8px;
+    padding:6px 10px;font-size:14px;outline:none
+  }
+  input[type=number]{width:90px}
+  button{cursor:pointer}
+  button.primary{background:#1d4ed8;border-color:#1d4ed8}
+  button.ghost{background:transparent}
+  button.ok{background:var(--ok);border-color:var(--ok);color:#062a22}
+  button.warn{background:var(--warn);border-color:var(--warn);color:#2b1d04}
+  button.bad{background:var(--bad);border-color:var(--bad)}
+  .counter{padding:6px 10px;border-radius:8px;background:#0b1020;border:1px solid #334155;min-width:84px;text-align:center}
+  .flex{display:flex;align-items:center;gap:8px}
+  .panel{background:var(--panel);border-radius:12px;padding:12px}
+  #board{
+    background:var(--grid);padding:var(--gap);border-radius:12px;overflow:auto;max-height:calc(100vh - 220px)
+  }
+  .grid{display:grid;gap:var(--gap);width:max-content}
+  .cell{
+    width:var(--cell);height:var(--cell);display:flex;align-items:center;justify-content:center;
+    background:#0b1020;border:1px solid #1f2937;border-radius:6px;user-select:none;
+    font-weight:700;font-size:14px;line-height:1;cursor:pointer;
+    transition:transform .02s ease-in-out
+  }
+  .cell:active{transform:translateY(1px)}
+  .cell.revealed{background:#111827;border-color:#374151;cursor:default}
+  .cell.flag{background:#0b1020}
+  .cell.mine.revealed{background:#3f1d1d;border-color:#b91c1c}
+  .n1{color:#60a5fa}.n2{color:#34d399}.n3{color:#f87171}.n4{color:#60a5fa}
+  .n5{color:#f59e0b}.n6{color:#22d3ee}.n7{color:#e5e7eb}.n8{color:#9ca3af}
+  #sidebar .panel + .panel{margin-top:12px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{border-bottom:1px solid #374151;padding:6px 6px;text-align:left;white-space:nowrap}
+  th{position:sticky;top:0;background:var(--panel)}
+  .muted{color:var(--muted)}
+  .status{font-weight:700}
+  .status.ok{color:var(--ok)} .status.bad{color:var(--bad)} .status.run{color:#38bdf8}
+  .chip{padding:2px 8px;border-radius:999px;background:#0b1020;border:1px solid #334155;font-size:12px}
+  .help{font-size:12px;color:var(--muted)}
+  @media (max-width:960px){.wrap{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>扫雷</h1>
+
+    <div class="group">
+      <span class="muted">用户</span>
+      <input id="username" placeholder="输入用户名" />
+      <button id="saveName" class="primary">保存</button>
+      <span id="currentUser" class="chip"></span>
+    </div>
+
+    <div class="group">
+      <span class="muted">难度</span>
+      <select id="difficulty">
+        <option value="beginner">初级 9×9 / 10雷</option>
+        <option value="intermediate">中级 16×16 / 40雷</option>
+        <option value="expert">高级 30×16 / 99雷</option>
+        <option value="custom">自定义</option>
+      </select>
+      <span class="muted">行</span><input id="rows" type="number" min="5" max="50" value="9" />
+      <span class="muted">列</span><input id="cols" type="number" min="5" max="50" value="9" />
+      <span class="muted">雷</span><input id="mines" type="number" min="1" max="2000" value="10" />
+      <button id="newGame" class="ok">新游戏</button>
+    </div>
+
+    <div class="group">
+      <div id="timer" class="counter">⏱ 000</div>
+      <div id="mineCount" class="counter">💣 000</div>
+      <button id="flagMode" class="warn">标记模式：关</button>
+      <span id="status" class="status">就绪</span>
+    </div>
+  </header>
+
+  <div id="board" class="panel">
+    <div id="grid" class="grid" aria-label="扫雷棋盘"></div>
+    <div class="help" style="margin-top:8px">
+      PC：左键开格，右键插旗，已翻开的数字双击“扫雷”。移动端：可切换“标记模式”。首击不死。
+    </div>
+  </div>
+
+  <div id="sidebar">
+    <div class="panel">
+      <div class="flex" style="justify-content:space-between">
+        <strong>成绩榜</strong>
+        <label class="flex" style="gap:4px"><input id="onlyMine" type="checkbox" /> 只看当前用户</label>
+      </div>
+      <div class="help" style="margin:6px 0 10px">仅记录胜利用时。数据保存在本地浏览器。</div>
+      <div style="overflow:auto;max-height:420px">
+        <table id="scoreTable">
+          <thead>
+            <tr><th>#</th><th>用户</th><th>尺寸</th><th>雷</th><th>用时</th><th>日期</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="flex" style="margin-top:10px;gap:8px;flex-wrap:wrap">
+        <button id="clearScores" class="bad">清空成绩与统计</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <strong>统计</strong>
+      <div class="help" id="stats">胜：0｜负：0｜胜率：0%</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  // —— 全局状态 ——
+  const el = {
+    grid: document.getElementById('grid'),
+    board: document.getElementById('board'),
+    timer: document.getElementById('timer'),
+    mineCount: document.getElementById('mineCount'),
+    status: document.getElementById('status'),
+    difficulty: document.getElementById('difficulty'),
+    rows: document.getElementById('rows'),
+    cols: document.getElementById('cols'),
+    mines: document.getElementById('mines'),
+    newGame: document.getElementById('newGame'),
+    flagMode: document.getElementById('flagMode'),
+    username: document.getElementById('username'),
+    saveName: document.getElementById('saveName'),
+    currentUser: document.getElementById('currentUser'),
+    onlyMine: document.getElementById('onlyMine'),
+    scoreTable: document.querySelector('#scoreTable tbody'),
+    clearScores: document.getElementById('clearScores'),
+    stats: document.getElementById('stats'),
+  };
+
+  let R=9,C=9,M=10;
+  let cells=[]; // 每格：{mine,revealed,flag,adj}
+  let firstClick=true, alive=true, flags=0, revealed=0;
+  let totalNonMine=0;
+  let t=0, tHandle=null;
+  let wins = +(localStorage.getItem('ms_wins')||0);
+  let loses = +(localStorage.getItem('ms_loses')||0);
+
+  // —— 本地存储：用户名与成绩 ——
+  const LS_USER='ms_username';
+  const LS_SCORES='ms_scores_v1';
+  function getUser(){ return localStorage.getItem(LS_USER)||'' }
+  function setUser(name){ localStorage.setItem(LS_USER, name||'') }
+  function loadScores(){
+    try{ return JSON.parse(localStorage.getItem(LS_SCORES)||'[]') }catch{ return [] }
+  }
+  function saveScores(arr){ localStorage.setItem(LS_SCORES, JSON.stringify(arr)) }
+
+  // —— 工具 ——
+  function idx(r,c){ return r*C + c }
+  function inBounds(r,c){ return r>=0 && r<R && c>=0 && c<C }
+  function neigh(i){
+    const r=Math.floor(i/C), c=i%C, out=[];
+    for(let dr=-1; dr<=1; dr++)for(let dc=-1; dc<=1; dc++){
+      if(dr===0 && dc===0) continue;
+      const rr=r+dr, cc=c+dc;
+      if(inBounds(rr,cc)) out.push(idx(rr,cc));
+    }
+    return out;
+  }
+  function formatTime(s){
+    if(s>=3600){const h=Math.floor(s/3600), m=Math.floor((s%3600)/60), ss=s%60; return `${h}:${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}`}
+    return `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`
+  }
+  function setStatus(text, cls){
+    el.status.className='status'+(cls?(' '+cls):''); el.status.textContent=text;
+  }
+  function setCounters(){
+    el.timer.textContent = `⏱ ${String(t).padStart(3,'0')}`;
+    el.mineCount.textContent = `💣 ${String(M - flags).padStart(3,'0')}`;
+  }
+
+  // —— 计时 ——
+  function startTimer(){
+    if(tHandle) return;
+    tHandle = setInterval(()=>{ t++; el.timer.textContent=`⏱ ${String(t).padStart(3,'0')}`; },1000);
+  }
+  function stopTimer(){
+    if(tHandle){ clearInterval(tHandle); tHandle=null; }
+  }
+  function resetTimer(){ stopTimer(); t=0; setCounters(); }
+
+  // —— 棋盘生成 ——
+  function setupGrid(){
+    el.grid.style.gridTemplateColumns = `repeat(${C}, var(--cell))`;
+    el.grid.innerHTML='';
+    for(let i=0;i<R*C;i++){
+      const d=document.createElement('div');
+      d.className='cell';
+      d.dataset.i=i;
+      d.setAttribute('aria-label','未翻开');
+      d.addEventListener('click', onLeftClick);
+      d.addEventListener('contextmenu', onRightClick);
+      d.addEventListener('dblclick', onChord);
+      el.grid.appendChild(d);
+    }
+    // 禁用原生右键菜单
+    el.grid.addEventListener('contextmenu', e=>e.preventDefault());
+  }
+  function initCells(){
+    cells = Array.from({length:R*C}, ()=>({mine:false,revealed:false,flag:false,adj:0}));
+    flags=0; revealed=0; totalNonMine=R*C - M;
+    firstClick=true; alive=true;
+    resetTimer();
+    setStatus('就绪');
+    setCounters();
+  }
+  function placeMines(excludeIndex){
+    // 首击不死：排除首击及其邻近 8 格
+    const forbid = new Set([excludeIndex, ...neigh(excludeIndex)]);
+    const pool=[];
+    for(let i=0;i<R*C;i++) if(!forbid.has(i)) pool.push(i);
+    // 随机放置
+    for(let m=0;m<M;m++){
+      if(pool.length===0) break; // 极端小盘防御
+      const k = Math.floor(Math.random()*pool.length);
+      const pos = pool.splice(k,1)[0];
+      cells[pos].mine=true;
+    }
+    // 计算邻雷数
+    for(let i=0;i<R*C;i++){
+      if(cells[i].mine){ cells[i].adj=-1; continue; }
+      let n=0; for(const j of neigh(i)) if(cells[j].mine) n++;
+      cells[i].adj=n;
+    }
+  }
+
+  // —— 交互 ——
+  function onLeftClick(e){
+    const i = +e.currentTarget.dataset.i;
+    if(!alive) return;
+    if(cells[i].flag) return;
+    if(firstClick){
+      placeMines(i);
+      firstClick=false;
+      startTimer();
+      setStatus('进行中','run');
+    }
+    reveal(i);
+  }
+  function onRightClick(e){
+    e.preventDefault();
+    const i = +e.currentTarget.dataset.i;
+    if(!alive) return;
+    if(cells[i].revealed) return;
+    toggleFlag(i);
+  }
+  function onChord(e){
+    const i=+e.currentTarget.dataset.i;
+    if(!alive) return;
+    const cell=cells[i];
+    if(!cell.revealed || cell.adj<=0) return;
+    const ns = neigh(i);
+    const flagCount = ns.reduce((a,j)=>a+(cells[j].flag?1:0),0);
+    if(flagCount!==cell.adj) return;
+    for(const j of ns){
+      if(!cells[j].flag && !cells[j].revealed){
+        reveal(j);
+        if(!alive) break;
+      }
+    }
+  }
+
+  function toggleFlag(i){
+    const cell=cells[i];
+    if(cell.revealed) return;
+    cell.flag=!cell.flag;
+    flags += cell.flag?1:-1;
+    renderCell(i);
+    setCounters();
+  }
+
+  function reveal(i){
+    const cell=cells[i];
+    if(cell.revealed || cell.flag) return;
+    cell.revealed=true; revealed++;
+    renderCell(i);
+
+    if(cell.mine){
+      // 触雷
+      alive=false;
+      stopTimer();
+      exposeAllMines(i);
+      setStatus('失败','bad');
+      loses++; localStorage.setItem('ms_loses', String(loses));
+      updateStats();
+      return;
+    }
+    // 空白扩展
+    if(cell.adj===0){
+      for(const j of neigh(i)){
+        if(!cells[j].revealed && !cells[j].flag) reveal(j);
+      }
+    }
+    // 胜利判定
+    if(revealed===totalNonMine){
+      alive=false;
+      stopTimer();
+      setStatus('胜利','ok');
+      wins++; localStorage.setItem('ms_wins', String(wins));
+      recordWin();
+      updateStats();
+      // 自动插完剩余旗
+      for(let k=0;k<cells.length;k++){
+        if(cells[k].mine && !cells[k].flag){
+          cells[k].flag=true; flags++;
+          renderCell(k);
+        }
+      }
+      setCounters();
+    }
+  }
+
+  function exposeAllMines(triggerIndex){
+    for(let i=0;i<cells.length;i++){
+      if(cells[i].mine){
+        cells[i].revealed=true;
+        renderCell(i);
+      }
+    }
+    // 标注引爆格
+    const d = el.grid.children[triggerIndex];
+    if(d) d.style.outline='2px solid var(--bad)';
+  }
+
+  function renderCell(i){
+    const d = el.grid.children[i];
+    const cell = cells[i];
+    d.className = 'cell' + (cell.revealed?' revealed':'') + (cell.flag?' flag':'') + (cell.mine?' mine':'');
+    if(cell.revealed){
+      if(cell.mine){ d.textContent = '💣'; d.setAttribute('aria-label','地雷'); return; }
+      d.textContent = cell.adj>0 ? String(cell.adj) : '';
+      if(cell.adj>0) d.classList.add('n'+cell.adj);
+      d.setAttribute('aria-label', cell.adj>0?`数字${cell.adj}`:'空白');
+    }else{
+      d.textContent = cell.flag ? '🚩' : '';
+      d.setAttribute('aria-label', cell.flag?'旗帜':'未翻开');
+    }
+  }
+
+  // —— 成绩记录与榜单 ——
+  function recordWin(){
+    const name = getUser() || '匿名';
+    const rec = {
+      name, rows:R, cols:C, mines:M, seconds:t, date:new Date().toISOString()
+    };
+    const arr = loadScores();
+    arr.push(rec);
+    // 只保留最近的 500 条
+    if(arr.length>500) arr.splice(0, arr.length-500);
+    saveScores(arr);
+    renderScores();
+  }
+  function renderScores(){
+    const arr = loadScores().slice();
+    const onlyMine = el.onlyMine.checked;
+    const name = getUser();
+    const filtered = arr.filter(r => !onlyMine || r.name===name)
+                        .sort((a,b)=>a.seconds-b.seconds)
+    const tbody = el.scoreTable;
+    tbody.innerHTML='';
+    filtered.forEach((r,idx)=>{
+      const tr=document.createElement('tr');
+      const size=`${r.cols}×${r.rows}`;
+      const dt = new Date(r.date);
+      tr.innerHTML = `
+        <td>${idx+1}</td>
+        <td>${escapeHtml(r.name)}</td>
+        <td>${size}</td>
+        <td>${r.mines}</td>
+        <td>${formatTime(r.seconds)}</td>
+        <td>${dt.toLocaleString()}</td>`;
+      tbody.appendChild(tr);
+    });
+  }
+  function updateStats(){
+    const total = wins+loses;
+    const rate = total? Math.round(wins*100/total):0;
+    el.stats.textContent = `胜：${wins}｜负：${loses}｜胜率：${rate}%`;
+  }
+  function escapeHtml(s){ return String(s).replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])) }
+
+  // —— UI 控件 ——
+  function applyDifficulty(){
+    const d = el.difficulty.value;
+    if(d==='beginner'){ R=9; C=9; M=10 }
+    else if(d==='intermediate'){ R=16; C=16; M=40 }
+    else if(d==='expert'){ R=16; C=30; M=99 }
+    else { // custom
+      R = clamp(parseInt(el.rows.value||'9',10), 5, 50);
+      C = clamp(parseInt(el.cols.value||'9',10), 5, 50);
+      const maxM = Math.max(1, R*C-1);
+      M = clamp(parseInt(el.mines.value||'10',10), 1, maxM);
+      el.mines.max = String(maxM);
+      el.rows.value=String(R); el.cols.value=String(C); el.mines.value=String(M);
+    }
+    document.documentElement.style.setProperty('--cell', C>28||R>28?'22px':'28px');
+  }
+  function clamp(v,min,max){ return isNaN(v)?min:Math.max(min, Math.min(max, v)) }
+
+  function newGame(){
+    applyDifficulty();
+    setupGrid();
+    initCells();
+  }
+
+  // —— 事件绑定 ——
+  el.newGame.addEventListener('click', newGame);
+  el.difficulty.addEventListener('change', ()=>{
+    const isCustom = el.difficulty.value==='custom';
+    [el.rows,el.cols,el.mines].forEach(x=>x.disabled=!isCustom);
+    newGame();
+  });
+  [el.rows,el.cols,el.mines].forEach(inp=>inp.addEventListener('change', ()=>{
+    el.difficulty.value='custom'; newGame();
+  }));
+  el.flagMode.addEventListener('click', ()=>{
+    const on = el.flagMode.dataset.on==='1';
+    if(on){ el.flagMode.dataset.on='0'; el.flagMode.textContent='标记模式：关'; el.flagMode.classList.remove('ok'); el.flagMode.classList.add('warn'); }
+    else { el.flagMode.dataset.on='1'; el.flagMode.textContent='标记模式：开'; el.flagMode.classList.remove('warn'); el.flagMode.classList.add('ok'); }
+  });
+  // 触摸支持：点击根据标记模式决定开格或插旗
+  el.grid.addEventListener('pointerdown', (ev)=>{
+    if(ev.pointerType!=='touch') return;
+    const tgt = ev.target.closest('.cell'); if(!tgt) return;
+    const i=+tgt.dataset.i;
+    const flagModeOn = el.flagMode.dataset.on==='1';
+    if(flagModeOn){ toggleFlag(i); }
+    else { onLeftClick({currentTarget:tgt}); }
+  });
+
+  el.saveName.addEventListener('click', ()=>{
+    const name = el.username.value.trim().slice(0,32) || '';
+    setUser(name);
+    el.currentUser.textContent = name?`当前用户：${name}`:'当前用户：未设置';
+    renderScores();
+  });
+  el.onlyMine.addEventListener('change', renderScores);
+
+  // ——— 修复点：清空按钮现在会同时清空【榜单记录】与【胜负统计】 ———
+  el.clearScores.addEventListener('click', ()=>{
+    if(confirm('确定清空本地所有成绩与胜负统计？此操作不可恢复。')){
+      // 清空成绩列表
+      localStorage.removeItem(LS_SCORES);
+      saveScores([]);
+      renderScores();
+      // 清空胜负统计
+      wins = 0; loses = 0;
+      localStorage.setItem('ms_wins','0');
+      localStorage.setItem('ms_loses','0');
+      updateStats();
+      setStatus('已清空成绩与统计','run');
+    }
+  });
+
+  // —— 启动 ——
+  (function boot(){
+    // 恢复用户名
+    const name = getUser(); el.username.value=name; el.currentUser.textContent = name?`当前用户：${name}`:'当前用户：未设置';
+    // 自定义输入是否可用
+    const isCustom = el.difficulty.value==='custom';
+    [el.rows,el.cols,el.mines].forEach(x=>x.disabled=!isCustom);
+    updateStats();
+    renderScores();
+    newGame();
+  })();
+
+})();
+</script>
+</body>
+</html>
